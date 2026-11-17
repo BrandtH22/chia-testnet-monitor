@@ -124,6 +124,8 @@ dl.facts i.sep { margin: 0 10px; color: var(--ink-3); font-style: normal; }
 .stats svg { display: block; width: 100%; height: 26px; margin-top: 8px; overflow: visible; }
 .stats svg text { font: 11.5px var(--font); fill: var(--ink-3); }
 .empty { color: var(--ink-3); padding: 7px 0; }
+.empty code { font: 450 13px ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink-2); white-space: nowrap; }
+.feed li.quiet { display: block; color: var(--ink-3); }
 
 .feed { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow-y: auto; }
 .feed li { display: grid; grid-template-columns: 62px 1fr; gap: 12px; padding: 7px 0; border-top: 1px solid var(--rule); font-size: 14px; }
@@ -237,6 +239,9 @@ function bytes(b) {
   return [b >= 100 ? b.toFixed(0) : b.toFixed(1), u[i]];
 }
 const bytesStr = (b) => bytes(b).join(" ");
+// Signage points and submitted blocks are logged at INFO, but Chia's default level is WARNING.
+const quietLevel = (service) => { const l = state.log_levels?.[service]; return ["WARNING", "WARN", "ERROR", "CRITICAL", "FATAL"].includes(l) ? l : null; };
+const SET_INFO = `<code>chia configure --set-log-level INFO</code>`;
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 // "11 min" as number + unit, with an optional suffix on the unit ("37 min ago")
 function durationNum(sec, suffix = "") {
@@ -428,7 +433,8 @@ function sparkline(hist) {
 
 /* ---------- signage points ---------- */
 function renderSp() {
-  const el = $("sp-chart"), sps = state.sps, T = state.sp_totals;
+  const el = $("sp-chart"), sps = state.sps, T = state.sp_totals, quiet = quietLevel("harvester");
+  if (quiet) { el.innerHTML = `<p class="empty">The harvester logs at ${esc(quiet)}, so signage points aren't in the log. Run ${SET_INFO} and restart Chia to see them.</p>`; $("sp-stats").innerHTML = ""; return; }
   if (!sps.length) { el.innerHTML = `<p class="empty">No signage points yet. They arrive about every 9 seconds once the farmer is connected.</p>`; $("sp-stats").innerHTML = ""; return; }
   // Tp leaves room above the tallest bar for its proof and quality diamonds.
   const W = el.clientWidth || 600, H = 190, L = 0, R = 0, Tp = 28, B = 22;
@@ -493,15 +499,18 @@ function lookupStrip(vals, avg) {
 
 /* ---------- events and peers ---------- */
 function renderFeed() {
-  const ev = state.events;
-  $("feed").innerHTML = ev.length ? ev.map((e) => {
+  const ev = state.events, h = quietLevel("harvester"), n = quietLevel("full_node");
+  const note = h && n ? `Proofs aren't listed and win times are approximate while Chia logs at ${esc(h)}.`
+    : h ? `Proofs aren't listed while the harvester logs at ${esc(h)}.`
+    : n ? `Win times are approximate while the full node logs at ${esc(n)}.` : "";
+  $("feed").innerHTML = (note ? `<li class="quiet">${note}</li>` : "") + (ev.length ? ev.map((e) => {
     let what;
     if (e.kind === "win") what = `<span class="win">${esc(e.text)}</span>`;
     else if (e.kind === "proof") what = `Found ${esc(e.text)}`;
     else if (e.kind === "warning") what = `<span class="warn">▲ Warning</span> <span class="msg">${esc(e.text)}</span>`;
     else what = `<span class="crit">✕ Error</span> <span class="msg">${esc(e.text)}</span>`;
     return `<li><time>${e.t ? clock(e.t) : ""}</time><span>${what}</span></li>`;
-  }).join("") : `<li><time></time><span class="msg">No proofs or warnings yet.</span></li>`;
+  }).join("") : `<li><time></time><span class="msg">${h ? "No warnings yet." : "No proofs or warnings yet."}</span></li>`);
 }
 /* ---------- confetti ---------- */
 const toggle = $("confetti-toggle");
@@ -600,6 +609,8 @@ function renderStrength() {
     check = `<p class="note warn">▲ Filter counts differ from the harvester's in ${fmt(C.mismatch_count)} of ${fmt(C.compared)} sub-slots (latest ${esc(m.challenge)}: ${m.ours} here, ${m.harvester} from the harvester). The pass counts above may be off.</p>`;
   } else if (C.compared) {
     check = `<p class="note ok">Filter passes match the harvester's own count in all ${fmt(C.compared)} finished sub-slot${C.compared === 1 ? "" : "s"} checked.</p>`;
+  } else if (quietLevel("harvester")) {
+    check = `<p class="note">The harvester logs at ${esc(quietLevel("harvester"))}, so these counts can't be checked against its own.</p>`;
   } else {
     check = `<p class="note">Filter passes are checked against the harvester's count once a full sub-slot (about 10 minutes) has been seen.</p>`;
   }

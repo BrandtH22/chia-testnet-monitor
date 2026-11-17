@@ -9,6 +9,7 @@ Run it with the chia-blockchain venv active and CHIA_ROOT pointing at your testn
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 import re
@@ -65,6 +66,9 @@ POLL_SECONDS = 2.0
 HISTORY_EVERY = 10.0
 SECONDS_PER_BLOCK = 24 * 3600 / 4608  # same fallback as `chia farm summary`
 LOG_PATH = ROOT / "log/debug.log"
+BACKFILL_SECONDS = 4 * 3600  # how much log history to read on start
+BACKFILL_MAX_BYTES = 64_000_000  # at DEBUG, 4 hours can be a lot of log
+LOG_LEVEL_EVERY = 30.0
 
 # Same constants the full node runs with (see chia/full_node/start_full_node.py).
 _overrides = dict(CONFIG["full_node"]["network_overrides"]["constants"][CONFIG["selected_network"]])
@@ -105,6 +109,14 @@ def rpc(service: str, endpoint: str, payload: dict | None = None) -> dict | None
     return body if body.get("success") else None
 
 
+def log_level(service: str) -> str:
+    """The level the service logs at right now. From the config if the service is down or predates the RPC."""
+    if resp := rpc(service, "get_log_level"):
+        return resp["level"]
+    logging_config = CONFIG.get(service, {}).get("logging") or CONFIG.get("logging") or {}
+    return str(logging_config.get("log_level", "WARNING")).upper()
+
+
 def plot_class(param: PlotParam) -> str:
     """"v1", or "s<strength>" for v2 plots."""
     return "v1" if param.size_v1 is not None else f"s{param.strength_v2}"
@@ -116,6 +128,7 @@ SP_RE = re.compile(
 )
 FARMED_RE = re.compile(r"^(\S+) .*Farmed unfinished_block (\w+), SP: (\d+)")
 LEVEL_RE = re.compile(r"^(\S+) \S+ (\S+) (\S+)\s*: (WARNING|ERROR|CRITICAL)\s+(.*)")
+STAMP_RE = re.compile(rb"^(\d{4}-\d\d-\d\dT[\d:.]+) ")
 NOISE_RE = re.compile(r"upnp|portmapping|mempool using the slow-path", re.I)
 
 
@@ -419,6 +432,8 @@ class Collector:
         self.sp_totals = {"count": 0, "eligible": 0, "passed": 0, "proofs": 0, "v1": 0, "v2": 0, "max_s": 0.0, "sum_s": 0.0}
         self.log_offset: int | None = None
         self.log_inode: int | None = None
+        self.log_levels: dict[str, str] = {}
+        self.last_level_check = 0.0
         self.our_ph: str | None = None
         self.started = time.time()
 
@@ -476,7 +491,7 @@ class Collector:
         except OSError:
             return
         if self.log_inode != st.st_ino or (self.log_offset or 0) > st.st_size:
-            self.log_offset = max(0, st.st_size - 3_000_000) if self.log_inode is None else 0
+            self.log_offset = self._backfill_offset(st.st_size) if self.log_inode is None else 0
             self.log_inode = st.st_ino
         with LOG_PATH.open("rb") as f:
             f.seek(self.log_offset or 0)
@@ -485,6 +500,26 @@ class Collector:
         self.log_offset = (self.log_offset or 0) + cut
         for raw in chunk[:cut].decode("utf-8", "replace").splitlines():
             self._parse_line(raw)
+
+    @staticmethod
+    def _backfill_offset(size: int) -> int:
+        """Start of the first line within BACKFILL_SECONDS of now, stepping back a megabyte at a time."""
+        cutoff = time.time() - BACKFILL_SECONDS
+        offset = size
+        with LOG_PATH.open("rb") as f:
+            while offset > 0 and size - offset < BACKFILL_MAX_BYTES:
+                offset = max(0, offset - 1_000_000)
+                f.seek(offset)
+                if offset:
+                    f.readline()  # skip the partial line we landed in
+                stamp = next((m[1] for line in itertools.islice(f, 50) if (m := STAMP_RE.match(line))), None)
+                if stamp is not None and log_time(stamp.decode()) < cutoff:
+                    break
+            if offset:
+                f.seek(offset)
+                f.readline()
+                offset = f.tell()
+        return offset
 
     def _parse_line(self, line: str) -> None:
         if m := SP_RE.match(line):
@@ -562,6 +597,10 @@ class Collector:
         wheight = rpc("wallet", "get_height_info")
         self._read_log()
         self._flush_proofs(now)
+        if now - self.last_level_check >= LOG_LEVEL_EVERY:
+            self.last_level_check = now
+            # Signage points come from the harvester's INFO lines, submitted blocks from the full node's.
+            self.log_levels = {s: log_level(s) for s in ("harvester", "full_node")}
         farmer_sps = rpc("farmer", "get_signage_points")
 
         node = None
@@ -700,6 +739,7 @@ class Collector:
             "sp_totals": {**tot, "avg_s": tot["sum_s"] / tot["count"] if tot["count"] else 0.0},
             "events": sorted(list(self.events) + self._win_events(chain), key=lambda e: e["t"] or 0, reverse=True)[:40],
             "started": self.started,
+            "log_levels": self.log_levels,
             "strength": strength_snapshot,
             "plotting": plotting_status({Path(p["filename"]).name for p in plot_list["plots"]} if plot_list else None),
         }
