@@ -112,7 +112,7 @@ dl.facts i.sep { margin: 0 10px; color: var(--ink-3); font-style: normal; }
 .side .feed { contain: size; max-height: none; }
 .feed li:last-child { border-bottom: 1px solid var(--rule); }
 @media (max-width: 860px) { .side .feed { contain: none; max-height: 360px; } }
-.chart { display: block; width: 100%; height: 170px; overflow: visible; }
+.chart { display: block; width: 100%; height: 190px; overflow: visible; }
 .chart text { font: 12px var(--font); fill: var(--ink-3); font-variant-numeric: tabular-nums; }
 .stats { display: grid; grid-template-columns: 1.3fr 1fr 1fr 2fr; gap: 16px 32px; margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--rule); }
 @media (max-width: 600px) { .stats { grid-template-columns: 1fr 1fr; } }
@@ -430,7 +430,8 @@ function sparkline(hist) {
 function renderSp() {
   const el = $("sp-chart"), sps = state.sps, T = state.sp_totals;
   if (!sps.length) { el.innerHTML = `<p class="empty">No signage points yet. They arrive about every 9 seconds once the farmer is connected.</p>`; $("sp-stats").innerHTML = ""; return; }
-  const W = el.clientWidth || 600, H = 170, L = 0, R = 0, Tp = 0.5, B = 22;
+  // Tp leaves room above the tallest bar for its proof and quality diamonds.
+  const W = el.clientWidth || 600, H = 190, L = 0, R = 0, Tp = 28, B = 22;
   const maxE = Math.max(1, ...sps.map((s) => s.eligible));
   const stepY = maxE <= 4 ? 1 : Math.ceil(maxE / 4);
   const topV = Math.ceil(maxE / stepY) * stepY;
@@ -447,7 +448,7 @@ function renderSp() {
       if (s[v] ?? (v === "v1" ? s.proofs : 0)) { bars += `<path d="M${X + bw / 2},${my - 5} l5,5 l-5,5 l-5,-5 z" fill="${color}" stroke="var(--paper)" stroke-width="1.5"/>`; my -= 12; }
     }
     const tip = `${s.eligible} of ${s.plots} plots passed${s.v1 ? `\n${s.v1} v1 proof` : ""}${s.v2 ? `\n${s.v2} v2 quality` : ""}\nLookup ${(s.s * 1000).toFixed(1)} ms`;
-    hits += `<rect x="${X - (slot - bw) / 2}" y="${Tp - 12}" width="${slot}" height="${H - Tp - B + 12}" fill="transparent" data-tip-title="${clock(s.t)}" data-tip="${esc(tip)}"/>`;
+    hits += `<rect x="${X - (slot - bw) / 2}" y="0" width="${slot}" height="${H - B}" fill="transparent" data-tip-title="${clock(s.t)}" data-tip="${esc(tip)}"/>`;
   });
   const mins = Math.round((sps[sps.length - 1].t - sps[0].t) / 60);
   el.innerHTML = `<svg class="chart" width="${W}" height="${H}" role="img" aria-label="Plots passing the filter for each of the last ${sps.length} signage points">
