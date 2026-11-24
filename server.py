@@ -357,7 +357,7 @@ class StrengthStats:
         for cls in classes:
             c = self._c(cls)
             row = {
-                **c, "cls": cls, "plots": sum(p["cls"] == cls for p in plots),
+                **c, "cls": cls, "plots": sum(p["count"] for p in plots if p["cls"] == cls),
                 "gb": sum(p["gb"] for p in plots if p["cls"] == cls),
                 "wins": sum(b["ours"] and b.get("cls") == cls for b in chain),
             }
@@ -386,16 +386,31 @@ class StrengthStats:
 strength = StrengthStats()
 
 
+def plot_strength(plot: dict) -> int | None:
+    """Strength of a v2 plot group, or None for a v1 plot. Harvesters report it as its own field; older
+    builds reported v2 plots with a size of 0x80 | strength instead."""
+    if "strength" in plot:
+        return plot["strength"]
+    return plot["size"] & 0x7F if plot["size"] & 0x80 else None
+
+
+def plot_count(plot: dict) -> int:
+    """Plots in a harvester entry: a v2 group file holds group_size of them."""
+    return int(plot.get("group_size") or 1)
+
+
 def plots_for_stats(plot_list: dict | None) -> list[dict]:
     out = []
     for p in (plot_list or {}).get("plots", []):
-        v2 = bool(p["size"] & 0x80)
+        s = plot_strength(p)
         out.append({
-            "cls": f"s{p['size'] & 0x7F}" if v2 else "v1",
-            "strength": p["size"] & 0x7F if v2 else None,
-            "id": bytes32.fromhex(_hex(p["plot_id"])),
+            "cls": f"s{s}" if s is not None else "v1",
+            "strength": s,
+            # A v2 group passes the filter as one, by its group plot id.
+            "id": bytes32.fromhex(_hex(p.get("group_plot_id") or p["plot_id"])),
             "meta_group": int(p.get("meta_group") or 0),
-            "param": PlotParam.make_v1(p["size"]) if not v2 else None,
+            "param": PlotParam.make_v1(p["size"]) if s is None else None,
+            "count": plot_count(p),
             "gb": p["file_size"] / 1e9,
         })
     return out
@@ -405,10 +420,11 @@ def expected_pass(plots: list[dict], height: int) -> float:
     """Chance that at least one plot passes the filter at a signage point, at this height."""
     miss = 1.0
     for plot in plots:
-        if plot["size"] & 0x80:  # v2: 0x80 | strength, and only eligible from the fork
+        s = plot_strength(plot)
+        if s is not None:  # v2 is only eligible from the fork
             if height < FORK_HEIGHT:
                 continue
-            bits = calculate_plot_filter_bits(height, CONSTANTS, plot["size"] & 0x7F)
+            bits = calculate_plot_filter_bits(height, CONSTANTS, s)
         else:
             if height >= V1_CUTOFF:
                 continue
@@ -626,7 +642,7 @@ class Collector:
             hs = harvesters["harvesters"]
             farm = {
                 "harvesters": len(hs),
-                "plots": sum(h["plots"] for h in hs),
+                "plots": sum(h.get("plot_count", h["plots"]) for h in hs),  # plot_count counts the plots in groups
                 "size": sum(h["total_plot_size"] for h in hs),
                 "effective": sum(h["total_effective_plot_size"] for h in hs),
                 "failed": sum(h["failed_to_open_filenames"] for h in hs),
@@ -635,8 +651,8 @@ class Collector:
             }
             by_version = {"v1": {"plots": 0, "size": 0}, "v2": {"plots": 0, "size": 0}}
             for plot in (plot_list or {}).get("plots", []):
-                v = "v2" if plot["size"] & 0x80 else "v1"  # v2 plots report 0x80 | strength
-                by_version[v]["plots"] += 1
+                v = "v1" if plot_strength(plot) is None else "v2"
+                by_version[v]["plots"] += plot_count(plot)
                 by_version[v]["size"] += plot["file_size"]
             farm["by_version"] = by_version if plot_list else None
             if plot_list and node:
