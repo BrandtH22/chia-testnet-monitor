@@ -64,6 +64,15 @@ switch ($Command) {
             if ("$(& $Chia rpc farmer connect_to_solver '{\"host\": \"localhost\", \"port\": 8666}' 2>&1)" -match '"success": true') { $connected = $true; break }
         }
         Write-Host $(if ($connected) { "Connected the farmer to the solver" } else { "Couldn't connect the farmer to the solver; run: .\pos2.ps1 chia rpc farmer connect_to_solver" })
+        # A new testnet folder's wallet starts on the first key, not the one the rewards go to.
+        if (Test-Path $KeyFile) {
+            $fingerprint = (Get-Content $KeyFile -TotalCount 1).Trim()
+            foreach ($try in 1..12) {
+                # wallet show logs the wallet in to the key it's given
+                if ("$(& $Chia wallet show -f $fingerprint 2>&1)" -match "Balances, fingerprint: $fingerprint") { Write-Host "Wallet on key $fingerprint"; break }
+                Start-Sleep -Seconds 5
+            }
+        }
         Write-Host "Dashboard: $DashUrl"
     }
     "stop" {
