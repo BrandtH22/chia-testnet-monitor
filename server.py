@@ -633,7 +633,9 @@ class Collector:
             t = near[0] if near else ts
             if near:
                 farmed.remove(t)
-            events.append({"t": t, "kind": "win", "text": f"Won block {b['h']:,} with a {b['kind']} plot"})
+            cls = b.get("cls") or ""
+            strength_note = f", strength {cls[1:]}" if cls.startswith("s") else ""
+            events.append({"t": t, "kind": "win", "text": f"Won block {b['h']:,} with a {b['kind']} plot{strength_note}"})
         return events
 
     # ---- main loop ----------------------------------------------------
